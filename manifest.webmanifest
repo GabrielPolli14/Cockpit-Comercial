@@ -1,0 +1,17 @@
+{
+  "name": "Cockpit Comercial",
+  "short_name": "Cockpit",
+  "description": "Seu espaço de inteligência, organização e gestão comercial — interligado ao Sistema de Orçamentos",
+  "id": "autoglass-cockpit-comercial",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#EDEFF7",
+  "theme_color": "#3B3FD8",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
