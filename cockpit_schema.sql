@@ -1,21 +1,110 @@
 -- ═══════════════════════════════════════════════════════════════════════
--- COCKPIT COMERCIAL · banco no Supabase
--- Roda NO MESMO PROJETO do Sistema de Orçamentação (depois do supabase_schema.sql dele).
--- Cole este arquivo inteiro no SQL Editor e execute uma vez. É seguro reexecutar.
---
--- Interligação com o Orçamento:
---   • mesmo login (auth.users) e mesmo cadastro de acesso (tabela usuarios);
---   • mesmo porteiro: pode_acessar() — liberar/bloquear no Orçamento vale aqui na hora;
---   • orçamentos ligados aos clientes do Cockpit pelo CNPJ (view ck_vw_orcamentos).
--- Todas as tabelas do Cockpit usam o prefixo ck_ → nada do Orçamento é alterado.
+-- COCKPIT COMERCIAL · banco no Supabase (projeto PRÓPRIO, separado do Orçamento)
+-- Cole este arquivo inteiro no SQL Editor de um projeto novo e execute uma vez.
+-- É seguro reexecutar: nada é apagado nem duplicado.
 -- ═══════════════════════════════════════════════════════════════════════
 
--- 0. Pré-requisito: o schema do Orçamento já precisa existir neste projeto
+create extension if not exists "pgcrypto";
+
+-- ─────────────────────── USUÁRIOS E PERFIS ───────────────────────
+-- Mesma lógica do Sistema de Orçamentação: a conta nasce PENDENTE e um administrador libera.
 do $$ begin
-  if to_regclass('public.usuarios') is null or to_regprocedure('public.pode_acessar()') is null then
-    raise exception 'Rode primeiro o supabase_schema.sql do Sistema de Orçamentação neste mesmo projeto.';
-  end if;
+  create type perfil_usuario as enum ('administrador','gestor','analista');
+exception when duplicate_object then null; end $$;
+
+create table if not exists usuarios (
+  id         uuid primary key references auth.users(id) on delete cascade,
+  nome       text not null default '',
+  email      text not null,
+  telefone   text,
+  whatsapp   text,
+  perfil     perfil_usuario not null default 'analista',
+  ativo      boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+-- todo cadastro no Authentication ganha uma linha aqui; o PRIMEIRO vira administrador já liberado
+create or replace function public.handle_new_user() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare primeiro boolean;
+begin
+  select count(*) = 0 into primeiro from public.usuarios;
+  insert into public.usuarios (id, nome, email, telefone, whatsapp, perfil, ativo)
+  values (new.id,
+          coalesce(nullif(new.raw_user_meta_data->>'nome',''), split_part(new.email,'@',1)),
+          new.email, new.raw_user_meta_data->>'telefone', new.raw_user_meta_data->>'whatsapp',
+          (case when primeiro then 'administrador' else 'analista' end)::perfil_usuario, primeiro)
+  on conflict (id) do nothing;
+  return new;
 end $$;
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- usuários que já existiam no Authentication antes do script
+insert into usuarios (id, nome, email, ativo)
+select u.id, coalesce(nullif(u.raw_user_meta_data->>'nome',''), split_part(u.email,'@',1)), u.email, false
+from auth.users u on conflict (id) do nothing;
+update usuarios set perfil = 'administrador', ativo = true
+ where id = (select id from usuarios order by created_at, email limit 1)
+   and not exists (select 1 from usuarios where perfil = 'administrador');
+
+create or replace function perfil_atual() returns perfil_usuario
+language sql stable security definer set search_path = public as $$
+  select coalesce((select perfil from usuarios where id = auth.uid()), 'analista'::perfil_usuario);
+$$;
+create or replace function eh_gestor() returns boolean
+language sql stable as $$ select perfil_atual() in ('administrador','gestor'); $$;
+-- porteiro de todas as tabelas: ativo = false revoga o acesso na hora
+create or replace function pode_acessar() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from usuarios where id = auth.uid() and ativo);
+$$;
+
+-- domínios de e-mail aceitos no autocadastro (vazio = qualquer e-mail, sempre nascendo pendente)
+create table if not exists dominios_permitidos (dominio text primary key, criado_em timestamptz not null default now());
+create or replace function public.validar_dominio() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if exists (select 1 from dominios_permitidos)
+     and not exists (select 1 from dominios_permitidos d where lower(new.email) like '%@' || lower(d.dominio)) then
+    raise exception 'Cadastro não liberado para e-mails @%. Fale com o administrador.', split_part(new.email,'@',2);
+  end if;
+  return new;
+end $$;
+drop trigger if exists on_auth_user_domain on auth.users;
+create trigger on_auth_user_domain before insert on auth.users
+  for each row execute function public.validar_dominio();
+
+-- só administrador libera, bloqueia ou troca perfil (ninguém se autopromove)
+create or replace function public.protege_usuario() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if perfil_atual() <> 'administrador' then
+    new.perfil := old.perfil; new.ativo := old.ativo; new.email := old.email;
+  end if;
+  return new;
+end $$;
+drop trigger if exists tg_protege_usuario on usuarios;
+create trigger tg_protege_usuario before update on usuarios
+  for each row execute function public.protege_usuario();
+
+alter table usuarios enable row level security;
+alter table dominios_permitidos enable row level security;
+drop policy if exists usuarios_sel on usuarios;
+create policy usuarios_sel on usuarios for select to authenticated using (id = auth.uid() or eh_gestor());
+drop policy if exists usuarios_ins_self on usuarios;
+create policy usuarios_ins_self on usuarios for insert to authenticated with check (id = auth.uid() and ativo = false and perfil = 'analista');
+drop policy if exists usuarios_upd on usuarios;
+create policy usuarios_upd on usuarios for update to authenticated using (id = auth.uid() or eh_gestor()) with check (id = auth.uid() or eh_gestor());
+drop policy if exists dominios_sel on dominios_permitidos;
+create policy dominios_sel on dominios_permitidos for select to authenticated using (true);
+drop policy if exists dominios_adm on dominios_permitidos;
+create policy dominios_adm on dominios_permitidos for all to authenticated using (perfil_atual() = 'administrador') with check (perfil_atual() = 'administrador');
+grant usage on schema public to authenticated;
+grant select, insert, update on usuarios to authenticated;
+grant select, insert, delete on dominios_permitidos to authenticated;
+grant execute on function perfil_atual(), eh_gestor(), pode_acessar() to authenticated;
 
 -- ─────────────────────── BASE COMERCIAL (compartilhada pela equipe) ───────────────────────
 create table if not exists ck_grupos (
@@ -27,7 +116,7 @@ create table if not exists ck_grupos (
 create table if not exists ck_clientes (
   id              text primary key,            -- = código do cliente
   codigo          text not null unique,
-  documento       text,                        -- CNPJ/CPF só dígitos (liga com clientes.cnpj do Orçamento)
+  documento       text,                        -- CNPJ/CPF só dígitos
   razao_social    text not null,
   nome_fantasia   text,
   grupo_id        text references ck_grupos(id) on delete set null,
@@ -189,38 +278,13 @@ join ck_clientes c on c.id = v.cliente_id
 left join ck_grupos g on g.id = c.grupo_id
 left join ck_veiculos ve on ve.id = v.veiculo_id;
 
--- Orçamentos do Sistema de Orçamentação ligados pelo CNPJ (só dígitos)
-create view ck_vw_orcamentos with (security_invoker = on) as
-select o.id, o.numero, o.versao, o.data, o.status, o.total, o.veiculo, o.ident_tipo, o.ident_valor, o.tipo_servico,
-       regexp_replace(coalesce(c.cnpj,''), '\D', '', 'g') as cnpj,
-       coalesce(c.nome_fantasia, c.razao_social) as cliente, u.codigo as unidade,
-       (o.data + o.validade_dias) >= current_date as vigente,
-       ck.id as ck_cliente_id
-from orcamentos o
-left join clientes  c  on c.id = o.cliente_id
-left join unidades  u  on u.id = o.unidade_id
-left join ck_clientes ck on ck.documento = regexp_replace(coalesce(c.cnpj,''), '\D', '', 'g') and ck.documento <> '';
-
--- Faturamento x orçamentos por cliente e mês (cruzamento dos dois sistemas)
-create view ck_vw_cliente_mes with (security_invoker = on) as
-with f as (
-  select cliente_codigo, mes, sum(faturamento_real) as faturamento_real, count(distinct pedido) filter (where tipo = 'VENDA' and fatura) as vendas
-  from ck_vw_vendas group by 1, 2
-), o as (
-  select ck.codigo as cliente_codigo, date_trunc('month', vo.data)::date as mes, count(*) as orcamentos, sum(vo.total) as valor_orcado,
-         sum(vo.total) filter (where vo.status = 'Aprovado') as valor_aprovado
-  from ck_vw_orcamentos vo join ck_clientes ck on ck.id = vo.ck_cliente_id group by 1, 2
-)
-select coalesce(f.cliente_codigo, o.cliente_codigo) as cliente_codigo, coalesce(f.mes, o.mes) as mes,
-       coalesce(f.faturamento_real, 0) as faturamento_real, coalesce(f.vendas, 0) as vendas,
-       coalesce(o.orcamentos, 0) as orcamentos, coalesce(o.valor_orcado, 0) as valor_orcado, coalesce(o.valor_aprovado, 0) as valor_aprovado
-from f full join o on o.cliente_codigo = f.cliente_codigo and o.mes = f.mes;
-
-grant select on ck_vw_vendas, ck_vw_orcamentos, ck_vw_cliente_mes to authenticated;
+grant select on ck_vw_vendas to authenticated;
 
 -- ═══════════════════════════════════════════════════════════════════════
 -- PRONTO. Próximos passos (detalhados no README):
--- 1. Authentication → URL Configuration → Redirect URLs: adicione o endereço do Cockpit.
--- 2. Publique o Cockpit (index.html + config.js + ícones) e entre com o mesmo acesso do Orçamento.
--- 3. No Cockpit, Base de dados: importe a base de clientes e depois o extrato de vendas.
+-- 1. Authentication → Providers → Email: "Enable sign ups" ligado, "Confirm email" desligado.
+-- 2. Authentication → URL Configuration: Site URL e Redirect URLs = endereço do Cockpit.
+-- 3. Abra o Cockpit e use "Criar conta": o PRIMEIRO cadastro vira administrador já liberado.
+-- 4. Os demais entram pendentes; libere em Configurações → Acessos, dentro do Cockpit.
+-- 5. Base de dados: importe a base de clientes e depois o extrato de vendas.
 -- ═══════════════════════════════════════════════════════════════════════

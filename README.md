@@ -1,71 +1,91 @@
-# Cockpit Comercial — produção
+# Cockpit Comercial — produção (projeto Supabase próprio)
 
-Workspace comercial interligado ao **Sistema de Orçamentação Autoglass**: mesmo banco no Supabase,
-mesmo login, mesma liberação de acessos e orçamentos ligados aos clientes pelo CNPJ.
+O Cockpit usa um projeto Supabase **só dele**, separado do Sistema de Orçamentação.
+Login, liberação de acessos e dados ficam isolados. O modelo de acesso é o mesmo do Orçamento:
+a conta nasce pendente e o administrador libera.
 
-## Arquivos da publicação
+## Arquivos
 
 | Arquivo | Para que serve |
 |---|---|
 | `index.html` | O sistema inteiro (inclui o gerador de PowerPoint e o cliente do Supabase). |
-| `config.js` | O mesmo do Orçamento. Opcional se o Cockpit ficar numa subpasta do repositório do Orçamento. |
-| `favicon.ico`, `apple-touch-icon.png`, `icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, `manifest.webmanifest` | Ícone do Cockpit no navegador e na tela de início. |
-| `cockpit_schema.sql` | Cria as tabelas do Cockpit (prefixo `ck_`) no mesmo projeto do Orçamento. Roda uma vez. |
+| `config.js` | URL e chave do **projeto do Cockpit**. Fica na mesma pasta do `index.html`. |
+| `favicon.ico`, `apple-touch-icon.png`, `icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, `manifest.webmanifest` | Ícones do Cockpit. |
+| `cockpit_schema.sql` | Cria usuários, perfis, tabelas `ck_`, regras de acesso (RLS) e visões. Roda uma vez. |
 
 ---
 
-## Passo 1 — Banco (Supabase)
+## Passo 1 — Criar o projeto
 
-1. Abra o projeto do Orçamento no Supabase (`sldajxdoclkojauyadir`).
-2. Menu lateral → **SQL Editor** → **New query**.
-3. Abra o arquivo `cockpit_schema.sql`, copie todo o conteúdo, cole e clique em **Run**. Deve terminar com *Success. No rows returned*.
-   - Se aparecer *“Rode primeiro o supabase_schema.sql do Sistema de Orçamentação”*, você está em outro projeto. Confira o nome no topo da tela.
-   - O script pode ser executado de novo sem problema: não apaga dados nem duplica nada.
-4. Confira em **Table Editor**: devem aparecer as tabelas `ck_clientes`, `ck_vendas`, `ck_grupos`, `ck_frota`, `ck_veiculos`, `ck_eventos`, `ck_notas`, `ck_viagens`, `ck_oportunidades`, `ck_quadros`, `ck_swot`, `ck_apresentacoes`, `ck_interacoes`, `ck_contatos`, `ck_preferencias`, `ck_importacoes`. As tabelas do Orçamento continuam iguais.
+1. Em [supabase.com](https://supabase.com), clique em **New project**.
+2. Nome: `cockpit-comercial`. Região: **South America (São Paulo)**. Guarde a senha do banco.
+3. Aguarde o projeto ficar pronto (1 a 2 minutos).
 
-## Passo 2 — Publicar (GitHub Pages)
+## Passo 2 — Rodar o SQL
 
-**Recomendado: subpasta no repositório do Orçamento.** Assim o Cockpit usa o mesmo `config.js` e o
-mesmo login, sem configurar nada.
+1. Menu lateral → **SQL Editor** → **New query**.
+2. Abra o `cockpit_schema.sql`, copie todo o conteúdo, cole e clique em **Run**. Deve aparecer *Success*.
+3. Confira em **Table Editor**: `usuarios`, `dominios_permitidos` e as tabelas `ck_` (`ck_clientes`, `ck_vendas`, `ck_grupos`, `ck_eventos`, `ck_notas`, …).
+4. Pode rodar de novo quando quiser: o script não apaga nem duplica nada.
 
-1. No repositório do Orçamento: **Add file → Upload files**.
-2. Arraste a pasta `cockpit` inteira (com `index.html` e os ícones). O `config.js` pode ficar só na raiz, onde já está.
-3. **Commit changes**. Em 1–2 minutos o endereço fica disponível:
-   `https://SEU-USUARIO.github.io/orcamentos-autoglass/cockpit/`
+## Passo 3 — Configurar o login
 
-*Alternativa:* um repositório separado (`cockpit-comercial`), com `index.html`, `config.js` e os ícones
-na raiz. Depois, em **Settings → Pages**, escolha **Deploy from a branch → main → / (root)**.
+**Authentication → Sign In / Providers → Email:**
+- **Enable sign ups:** ligado (cada pessoa cria o próprio acesso pela tela do Cockpit).
+- **Confirm email:** desligado.
+- Recomendado: **Prevent use of leaked passwords** ligado.
 
-## Passo 3 — Endereço autorizado no Supabase
+**Authentication → URL Configuration:**
+- **Site URL:** o endereço do Cockpit, por exemplo `https://SEU-USUARIO.github.io/cockpit-comercial/`.
+- **Redirect URLs:** adicione o mesmo endereço. É por ele que o link de “Esqueci minha senha” volta para o Cockpit.
 
-**Authentication → URL Configuration → Redirect URLs → Add URL**: cole o endereço do Cockpit,
-por exemplo `https://SEU-USUARIO.github.io/orcamentos-autoglass/cockpit/`, e salve.
-Isso é necessário para o link de “Esqueci minha senha” voltar para o Cockpit.
+## Passo 4 — Preencher o config.js
 
-## Passo 4 — Primeiro acesso
+**Project Settings → API** do projeto **novo**:
+- **Project URL** → cole em `url`.
+- **anon / publishable key** → cole em `key`.
 
-1. Abra o Cockpit e entre com **o mesmo e-mail e senha do Orçamento**.
-2. Usuários novos podem usar **Criar conta**. A conta nasce **pendente** e é liberada pelo administrador em **Orçamentos → Configurações → Acessos**. A liberação vale para os dois sistemas.
-3. Bloquear alguém no Orçamento bloqueia o acesso ao Cockpit na hora.
-4. No mesmo GitHub Pages, quem entra em um sistema já está logado no outro (mesma sessão).
+```js
+window.COCKPIT_CONFIG = {
+  url: 'https://xxxxxxxx.supabase.co',
+  key: 'sb_publishable_...'
+};
+```
 
-## Passo 5 — Carregar a carteira
+**Nunca** use a chave `service_role` aqui.
 
-No Cockpit, **Base de dados**:
+## Passo 5 — Publicar (GitHub Pages)
 
-1. Importe **primeiro a base de clientes** (`Clientes_Locadoras.csv`). Os grupos econômicos são montados pelo *Cód. Cliente Principal*.
+1. No GitHub, crie o repositório **`cockpit-comercial`** (separado do Orçamento).
+2. Clique em **Add file → Upload files** e arraste `index.html`, `config.js` e os 6 arquivos de ícone e manifest. Depois, **Commit changes**.
+3. Em **Settings → Pages**, escolha **Deploy from a branch → main → / (root)** e clique em **Save**.
+4. Em 1 a 2 minutos o endereço aparece: `https://SEU-USUARIO.github.io/cockpit-comercial/`. Confira se é o mesmo que você colocou no Passo 3.
+
+## Passo 6 — Primeiro acesso
+
+1. Abra o Cockpit e clique em **Criar conta**. **O primeiro cadastro do projeto vira administrador já liberado**: faça o seu antes de todo mundo.
+2. Os cadastros seguintes nascem **pendentes**. O Hub avisa quando há alguém aguardando.
+3. Para liberar, vá em **Configurações → Acessos** e use **Liberar acesso**, **Bloquear** ou a troca de perfil.
+4. Em **Domínios aceitos no cadastro**, adicione `autoglass.com.br` para que só e-mails da empresa consigam criar conta.
+
+Perfis:
+- **Analista:** usa o sistema.
+- **Gestor:** também vê a lista de acessos e pode apagar cadastros.
+- **Administrador:** libera acessos e troca perfis.
+
+## Passo 7 — Carregar a carteira
+
+Em **Base de dados**:
+1. Importe primeiro a **base de clientes** (`Clientes_Locadoras.csv`).
 2. Depois importe o **extrato de vendas** (`Frotas_2026.csv`).
-3. Para atualizar, importe o extrato novo. As vendas do mesmo intervalo de datas são **substituídas**: cancelamentos e mudanças de etapa ficam corretos e nada duplica.
+3. Para atualizar, importe o extrato novo. As vendas do mesmo intervalo de datas são substituídas, sem duplicar.
 
-## Regras e interligação
+## Regras
 
-- **Faturamento real:** vendas faturáveis (Fechada, Liberada, Bloqueada, Impressa) menos devoluções. Gravada e Deletada aparecem nos filtros, mas não faturam. É a mesma regra no Dashboard, nas Apresentações, no Agente e na visão `ck_vw_vendas`.
-- **Orçamentos:** aparecem no perfil do cliente (aba *Orçamentos*), no Dashboard (no mesmo recorte) e no Hub, ligados pelo CNPJ. Para os atalhos “Novo orçamento”, ajuste `orcamentoUrl` no `config.js`.
-- **Privacidade:** a base comercial é compartilhada pela equipe liberada. Agenda, notas, viagens, quadros, oportunidades, SWOT, apresentações e favoritos são **pessoais**: cada usuário vê só os seus.
-- **Para Tableau/SQL:**
-  - `ck_vw_vendas`: linha a linha, com `faturamento_real`.
-  - `ck_vw_orcamentos`: orçamentos já ligados ao cliente do Cockpit.
-  - `ck_vw_cliente_mes`: faturamento × orçamentos por cliente e mês.
+- **Faturamento real:** vendas faturáveis (Fechada, Liberada, Bloqueada, Impressa) menos devoluções. Gravada e Deletada aparecem nos filtros, mas não faturam.
+- **Privacidade:** a base comercial (clientes e vendas) é compartilhada pelos usuários liberados. Agenda, notas, viagens, quadros, oportunidades, SWOT, apresentações e favoritos são **pessoais**.
+- **Tableau/SQL:** `ck_vw_vendas` traz linha a linha com `faturamento_real`.
+- **Sessão própria:** a sessão é `cockpit-auth`. Mesmo publicado no mesmo GitHub Pages do Orçamento, um sistema não interfere no login do outro.
 
 ## Desenvolvimento
 
